@@ -56,6 +56,8 @@ SHD and MNIST-family datasets are downloaded or read below `data_root`. NeuroMor
 
 The paper experiments were run on a single NVIDIA RTX 6000 Ada Generation/A6000. Runtime depends on the selected dataset configuration, hardware, and number of runs; this repository does not prescribe a fixed wall-clock duration for either rewiring or supervised training. Depending on the chosen selectivity criterion, rewiring can last anywhere between a single batch and hundreds of epochs. However, the supervised training duration depends on the user's configuration.
 
+To accelerate training progress, the rewiring phase uses a network that is significantly larger than the final network that is trained during the supervised phase. The size is set by `num_searching_units`. However, this parameter is a main driver for GPU memory consumption and should be reduced if respective errors occur.
+
 The rewiring phase allocates large intermediate buffers and is not expected to run comfortably on a small GPU. Use `--device cpu` only for configuration and smoke checks unless the machine has sufficient memory.
 
 ## Reproducibility and reported results

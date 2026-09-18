@@ -37,7 +37,7 @@ def _ensure_neuromorse_project():
 
     _require_git_lfs()
     project_dir.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory() as temporary_directory:
+    with tempfile.TemporaryDirectory(dir=project_dir.parent) as temporary_directory:
         temporary_project_dir = Path(temporary_directory) / "NeuroMorse"
         try:
             subprocess.run(
