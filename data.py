@@ -283,7 +283,7 @@ class TonicDataset:
         denoise=False,
         denoise_mode="tonic",
         num_crop_pixel=0,
-        val_on_test=True,
+        val_on_test=False,
         data_root="./data",
     ):
         self.nb_bins = nb_bins

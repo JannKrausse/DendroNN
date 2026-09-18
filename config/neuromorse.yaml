@@ -7,7 +7,7 @@ device: auto
 data_root: ./data
 logs_root: ./logs
 
-batch_size: 256
+batch_size: 50
 time_window: 8
 spat_ds_fac: 1.0
 num_crop_pixel: 0
@@ -59,7 +59,7 @@ lr_decay: 15
 lr_update_freq: 5
 l2_regu: 0
 dropout: 0.0
-num_workers: 2
+num_workers: 0
 max_rewiring_epochs: 10000000
 max_supervised_epochs: 1000000
 early_stopping_patience: 30

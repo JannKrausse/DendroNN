@@ -9,7 +9,7 @@ data_root: ./data
 logs_root: ./logs
 
 batch_size: 256
-time_window: 8
+time_window: 8000
 spat_ds_fac: 0.14285714285714285
 num_crop_pixel: 0
 seq_len: null
@@ -65,7 +65,7 @@ lr_update_freq: 5
 l2_regu: 0
 dropout: 0.0
 
-num_workers: 2
+num_workers: 0
 max_rewiring_epochs: 10000000
 max_supervised_epochs: 1000000
 early_stopping_patience: 30

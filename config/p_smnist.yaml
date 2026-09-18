@@ -60,7 +60,7 @@ lr_decay: 15
 lr_update_freq: 5
 l2_regu: 0
 dropout: 0.0
-num_workers: 2
+num_workers: 0
 max_rewiring_epochs: 10000000
 max_supervised_epochs: 1000000
 early_stopping_patience: 30
