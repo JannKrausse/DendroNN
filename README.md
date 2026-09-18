@@ -1,21 +1,79 @@
-This is the official repository which can be used for reproducing the results presented in "DendroNN: Dendrocentric Neural Networks for Energy-Efficient Classification of Event-Based Data". There, we present a novel event-based neural network that computes by identifying unique spatiotemporal sequences of spikes. Training is split into two phases: a rewiring phase to train the DendroNN layers followed by a supervised phase to train the output layer via backpropagation. When infered on custom digital accelerators, DendroNNs show tremendous benefits in terms of energy efficiency which is a testimony to their high degree of static and dynamic sparsity. Please refer to the publication for more information.
+# DendroNN
 
-Necessary requirements can be installed with
+This repository contains the code for “DendroNN: Dendrocentric Neural Networks for Energy-Efficient Classification of Event-Based Data”. Training has two phases: rewiring the DendroNN layers, followed by supervised training of the output layer.
+
+## Installation
+
+The tested environment uses **Python 3.12**. Create a virtual environment, install a PyTorch build appropriate for the target machine, and then install the remaining dependencies:
+
 ```bash
-pip install -r requirements.txt
+python3.12 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
 ```
 
-Then, training of DendroNNs is performed via the train.py. In there, simply specify DATASET and the respective hyperparameters before running
+The requirements file pins Python-compatible versions of PyTorch (`torch==2.2.1`, `torchvision==0.17.1`, and `torchaudio==2.2.1`). The default PyPI installation provides the PyTorch wheel published for that platform; for GPU use, install the matching official PyTorch CUDA wheel instead of the default wheel, then install the remaining requirements. The CUDA wheel determines the CUDA runtime used by PyTorch, while the host NVIDIA driver must be compatible with it. For example, a CUDA 12.1 installation can use:
+
 ```bash
-python3 train.py
+python -m pip install --index-url https://download.pytorch.org/whl/cu121 \
+  torch==2.2.1 torchvision==0.17.1 torchaudio==2.2.1
+python -m pip install --no-deps -r requirements.txt
 ```
-Results, including checkpoints, tensorboard logs, and confusion matrices will be logged in logs/DATASET/EXPERIMENT_NAME.
 
-In order to successfully run the NeuroMorse experiments, please make sure to clone the following repository into the neuromorse_data/ directory:
-https:// github.com/Ben-E-Walters/NeuroMorse.
+For CPU-only use, the default command is sufficient, although the rewiring phase is intended for a machine with substantial memory. The repository does not require conda.
 
-Finally, if you use DendroNNs or our code in your work, please cite our publication:
-```latex
+## Configuration and training
+
+Experiment hyperparameters are stored in YAML files. The canonical SHD configuration is [config/shd.yaml](config/shd.yaml). Dataset paths, device selection, seeds, worker counts, and output locations can be changed there or overridden without editing Python:
+
+```bash
+python train.py --config config/shd.yaml --device 0 --data-root ./data
+```
+
+Useful overrides are `--dataset`, `--device` (`cpu`, `auto`, or a CUDA index), `--seed`, `--data-root`, `--experiment-name`, and `--num-runs`. For example:
+
+```bash
+python train.py --config config/shd.yaml --device cpu --seed 42 --num-runs 1
+```
+
+The repository includes configurations for the considered dataset variants:
+
+| Configuration | Dataset |
+| --- | --- |
+| [config/shd.yaml](config/shd.yaml) | SHD |
+| [config/neuromorse.yaml](config/neuromorse.yaml) | NeuroMorse |
+| [config/smnist.yaml](config/smnist.yaml) | sequential MNIST |
+| [config/p_smnist.yaml](config/p_smnist.yaml) | permuted sequential MNIST |
+
+These files make the intended hyperparameters explicit. Dataset support still follows the implementation in `create_dataloader.py`.
+
+The results for DendroNN on each of the four datasets reported in the paper can be reproduced by using the respective dataset configuration YAML file above.
+
+SHD and MNIST-family datasets are downloaded or read below `data_root`. NeuroMorse additionally requires the NeuroMorse data loader and its prepared data files in `neuromorse_data/`; see that directory for the expected external repository. Results, checkpoints, TensorBoard logs, and confusion matrices are written below `logs/`.
+
+## Hardware and runtime
+
+The paper experiments were run on: **TODO: record GPU model, GPU count, and system RAM**.
+
+For a representative paper configuration, record the measured runtime separately as:
+
+- Rewiring: **TODO: measured wall-clock duration**
+- Supervised training: **TODO: measured wall-clock duration**
+
+The rewiring phase allocates large intermediate buffers and is not expected to run comfortably on a small GPU. Use `--device cpu` only for configuration and smoke checks unless the machine has sufficient memory.
+
+## Reproducibility and reported results
+
+The seed is part of each YAML configuration and is recorded in the experiment hyperparameters. Each table or figure in the paper should be mapped to a named configuration and list the number of independent seeds averaged. For now, this repository aids in reproducing the paper's accuracy numbers only; it does not reproduce the efficiency claims. The pruning and output-weight quantization code is not an energy model or accelerator implementation, and the accelerator and energy numbers reported in the paper were produced externally.
+
+## NeuroMorse
+
+To run NeuroMorse experiments, obtain the external NeuroMorse data repository and place its loader under `neuromorse_data/`, then follow its data preparation instructions. The data files themselves are not bundled here.
+
+## Citation
+
+```bibtex
 @article{krausse2026dendronn,
   title={DendroNN: Dendrocentric Neural Networks for Energy-Efficient Classification of Event-Based Data},
   author={Krausse, Jann and Su, Zhe and Mama, Kyrus and Knobloch, Klaus and Indiveri, Giacomo and Becker, J{\"u}rgen and others},

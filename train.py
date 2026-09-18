@@ -3,7 +3,9 @@ import sys
 import time
 import joblib
 import random
+import argparse
 import yaml
+import numpy as np
 
 import torch
 from pytorch_lightning import Trainer
@@ -17,45 +19,121 @@ from collate_functions import OnlySomeClassesCollateFn
 from rewiring_model import RewiringModel, RewiringProgressCallback
 from create_dataloader import create_dataloaders
 from compression import test_model_with_compression
+from config_loader import load_config
 
 import warnings
+
 warnings.filterwarnings("ignore", module="pytorch_lightning")
 
 
-def main():
-    NUM_RUNS = 1
-    GPU = True
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Train a DendroNN from a YAML experiment configuration."
+    )
+    parser.add_argument(
+        "--config",
+        default="config/shd.yaml",
+        help="Path to the YAML experiment configuration.",
+    )
+    parser.add_argument("--dataset", help="Override the dataset in the configuration.")
+    parser.add_argument(
+        "--device", help="Override the device, for example 'cpu', '0', or 'auto'."
+    )
+    parser.add_argument("--seed", type=int, help="Override the experiment seed.")
+    parser.add_argument(
+        "--data-root", help="Override the dataset download/storage directory."
+    )
+    parser.add_argument(
+        "--experiment-name", help="Override the experiment name used for logs."
+    )
+    parser.add_argument(
+        "--num-runs", type=int, help="Override the number of repeated runs."
+    )
+    return parser.parse_args()
 
-    DEVICE = 4
-    EXPERIMENT_NAME = "test"
-    DATASET = "SHD"  # SHD, NMNIST, NeuroMorse, sMNIST
-    permute_data = False  # want p-sMNIST? set DATASET = sMNIST and permute_data = True.
+
+def main():
+    args = parse_args()
+    config = load_config(
+        args.config,
+        overrides={
+            "dataset": args.dataset,
+            "device": args.device,
+            "seed": args.seed,
+            "data_root": args.data_root,
+            "experiment_name": args.experiment_name,
+            "num_runs": args.num_runs,
+        },
+    )
+
+    NUM_RUNS = config["num_runs"]
+    EXPERIMENT_NAME = config["experiment_name"]
+    DATASET = config["dataset"]
+    requested_device = str(config["device"]).lower()
+    if requested_device == "auto":
+        GPU = torch.cuda.is_available()
+        DEVICE = 0
+    elif requested_device == "cpu":
+        GPU = False
+        DEVICE = None
+    else:
+        DEVICE = int(requested_device)
+        if not torch.cuda.is_available():
+            raise RuntimeError(
+                "A CUDA device was requested, but CUDA is not available."
+            )
+        if DEVICE < 0 or DEVICE >= torch.cuda.device_count():
+            raise ValueError(
+                f"CUDA device {DEVICE} is unavailable; found {torch.cuda.device_count()} device(s)."
+            )
+        GPU = True
+    device_target = f"cuda:{DEVICE}" if GPU else "cpu"
+
+    permute_data = config["permute_data"]  # p-sMNIST requires DATASET=sMNIST.
     if permute_data:
         if DATASET != "sMNIST":
-            raise Exception(f"Permuting data is only implemented for sMNIST dataset. Current dataset: {DATASET}.")
+            raise Exception(
+                f"Permuting data is only implemented for sMNIST dataset. Current dataset: {DATASET}."
+            )
         DATASET = "p-sMNIST"
-        permutation_seed = random.randint(0, 1000)
-    else:
-        permutation_seed = None
 
-    REWIRING = True
-    SUPERVISED = True
-    CONTINUE_REWIRING_FROM_CKPT = False
-    CONTINUE_SUPERVISED_FROM_CKPT = False
+    REWIRING = config["rewiring"]
+    SUPERVISED = config["supervised"]
+    CONTINUE_REWIRING_FROM_CKPT = config["continue_rewiring_from_checkpoint"]
+    CONTINUE_SUPERVISED_FROM_CKPT = config["continue_supervised_from_checkpoint"]
 
-    load_checkpoint_folder = None
-    
-    for _ in range(NUM_RUNS):
-        # seed = 42
-        seed = random.randint(0, 1000)
+    load_checkpoint_folder = config["load_checkpoint_folder"]
+    configured_seed = config["seed"]
+
+    for run_idx in range(NUM_RUNS):
+        seed = (
+            configured_seed + run_idx
+            if configured_seed is not None
+            else random.SystemRandom().randint(0, 2**32 - 1)
+        )
+        config["seed"] = seed
+        random.seed(seed)
+        np.random.seed(seed)
         torch.manual_seed(seed)
+        if GPU:
+            torch.cuda.manual_seed_all(seed)
         print(f"This run's random seed is {seed}.")
+
+        if permute_data:
+            configured_permutation_seed = config["permutation_seed"]
+            permutation_seed = (
+                configured_permutation_seed + run_idx
+                if configured_permutation_seed is not None
+                else seed
+            )
+        else:
+            permutation_seed = None
 
         dataset = DATASET
         folder_name = dataset + "/"
 
-        batch_size = 256
-        time_window = 8  # corresponds to ms of data per time bin
+        batch_size = config["batch_size"]
+        time_window = config["time_window"]
         if dataset == "SHD":
             padding_size = int(4 / time_window * 292)  # 292 is max sequence in
             seq_len = padding_size
@@ -67,25 +145,28 @@ def main():
             seq_len = 100
             padding_size = None
         else:
-            if dataset != "NeuroMorse" and "sMNIST" not in dataset:  # NeuroMorse, sMNIST, or p-sMNIST
-                raise Exception(f"Dataset {dataset} is not yet implemented for padding size calculation.")
-        spat_ds_fac = 1/7
-        num_crop_pixel = 0
-        denoise_data = True
-        denoise_mode = 'tonic'
+            if (
+                dataset != "NeuroMorse" and "sMNIST" not in dataset
+            ):  # NeuroMorse, sMNIST, or p-sMNIST
+                raise Exception(
+                    f"Dataset {dataset} is not yet implemented for padding size calculation."
+                )
+        spat_ds_fac = config["spat_ds_fac"]
+        num_crop_pixel = config["num_crop_pixel"]
+        denoise_data = config["denoise_data"]
+        denoise_mode = config["denoise_mode"]
         binary_data = False
-        aug_og_data = False
-        aug_kwargs = None
-        task_type = None
+        aug_og_data = config["aug_og_data"]
+        aug_kwargs = config["aug_kwargs"]
+        task_type = config["task_type"]
 
-        if dataset != "SHD":
-            slice_input_by_amount = False
+        slice_input_by_amount = config["slice_input_by_amount"]
+        if not slice_input_by_amount:
             num_slices = 1
             include_zero_slice = False
             slicing_thrs = [0.5]
             slicing_thrs_maxs = None
         else:
-            slice_input_by_amount = True
             offset = 3.0
             scaling = 1.3
             max_value = 25  # only for timewindow 8 and spat_ds_fac 1/7
@@ -98,51 +179,79 @@ def main():
                 slicing_thrs.append(i / scaling - offset)
                 slicing_thrs_maxs.append(i * scaling + offset)
 
-        jitter_level = 'none'  # 'none', 'low', 'high', or any float
-        dropout_level = 'none'  # 'none', 'low', 'high', or any float
-        poisson_level = 'none'  # 'none', 'low', 'high', or any float
+        jitter_level = config["jitter_level"]
+        dropout_level = config["dropout_level"]
+        poisson_level = config["poisson_level"]
 
         # rewiring phase
-        num_seaching_units = 30000  # number of units to search for in the rewiring phase
-        thr_factor = 30
-        thr_low = -3 * thr_factor
-        thr_high = 15 * thr_factor
-        penalty_fac = 1 / 0.5  # prefactor in penalty term: 1 / (fac * num_classes), BE CAREFUL WITH CHOOSING THIS AS A SMALL FACTOR IN COMBINATION WITH EXCLUSIVE SEQUENCES CAN LEAD TO ALWAYS NEGATIVE LONGEVITY CHANGES
-        class_selectivity_threshold = 0.05
-        selectivity_gap_to_other_classes = 0.03
-        experiment_mode = "std"  # std, selectivity_gap, specific_selectivity
+        num_seaching_units = config["num_searching_units"]
+        thr_low = config["thr_low"]
+        thr_high = config["thr_high"]
+        penalty_fac = config["penalty_fac"]
+        class_selectivity_threshold = config["class_selectivity_threshold"]
+        selectivity_gap_to_other_classes = config["selectivity_gap_to_other_classes"]
+        experiment_mode = config["experiment_mode"]
 
-        net_type = "den"  # den, lif
-        if net_type == "lif":
-            REWIRING = False
+        num_hidden_layer = config["num_hidden_layer"]
+        num_hidden_units = config["num_hidden_units"]
+        output_bias = config["output_bias"]
+        output_decoder = config["output_decoder"]
+        assert (
+            num_seaching_units > 2 * num_hidden_units or not REWIRING
+        ), "Number of searching units should be at least twice the number of hidden units for better selection. Otherwise validation of rewiring phase will never get triggered."
 
-        # for all nets
-        num_hidden_layer = 1
-        num_hidden_units = 3000
-        output_bias = False
-        output_decoder = "max"  # max, avg, last, train, sum:drop_stop
-        assert num_seaching_units > 2 * num_hidden_units or not REWIRING, "Number of searching units should be at least twice the number of hidden units for better selection. Otherwise validation of rewiring phase will never get triggered."
+        num_spines = config["num_spines"]
+        min_num_spines = config["min_num_spines"]
+        max_seq_len = config["max_seq_len"] or seq_len
+        spike_acceptance_window = config["spike_acceptance_window"]
+        parallel_sequences = config["parallel_sequences"]
+        refrac_period = config["refrac_period"]
 
-        # for DendroNN
-        num_spines = 2
-        min_num_spines = 2
-        max_seq_len = seq_len # int(seq_len * 0.9)
-        spike_acceptance_window = 0
-        parallel_sequences = True
-        refrac_period = False  # every unit outputs only one spike per inference at max
-
-        lr = 1e-3
-        lr_scheduled = False
-        lr_decay = 15
-        lr_update_freq = 5
-        l2_regu = 0
-        dropout = 0.
+        lr = config["lr"]
+        lr_scheduled = config["lr_scheduled"]
+        lr_decay = config["lr_decay"]
+        lr_update_freq = config["lr_update_freq"]
+        l2_regu = config["l2_regu"]
+        dropout = config["dropout"]
 
         folder_name = folder_name + EXPERIMENT_NAME
 
         print("Getting data...")
-        train_loader, val_loader, test_loader, in_shape, out_shape, total_train_data, limit_train_batches, limit_val_batches, check_val_every_n_epoch = create_dataloaders(
-            dataset, seq_len, time_window, spat_ds_fac, batch_size, slice_input_by_amount, num_slices, slicing_thrs, slicing_thrs_maxs, include_zero_slice, padding_size, aug_og_data, aug_kwargs, denoise_data, denoise_mode, num_crop_pixel, task_type, jitter_level, dropout_level, poisson_level, permute_data, permutation_seed
+        (
+            train_loader,
+            val_loader,
+            test_loader,
+            in_shape,
+            out_shape,
+            total_train_data,
+            limit_train_batches,
+            limit_val_batches,
+            check_val_every_n_epoch,
+        ) = create_dataloaders(
+            dataset,
+            seq_len,
+            time_window,
+            spat_ds_fac,
+            batch_size,
+            slice_input_by_amount,
+            num_slices,
+            slicing_thrs,
+            slicing_thrs_maxs,
+            include_zero_slice,
+            padding_size,
+            aug_og_data,
+            aug_kwargs,
+            denoise_data,
+            denoise_mode,
+            num_crop_pixel,
+            task_type,
+            jitter_level,
+            dropout_level,
+            poisson_level,
+            permute_data,
+            permutation_seed,
+            data_root=config["data_root"],
+            num_workers=config["num_workers"],
         )
 
         num_classes = out_shape
@@ -158,6 +267,7 @@ def main():
         ]
 
         hyperparameters = {
+            "dataset": dataset,
             "num_spines": num_spines,
             "min_num_spines": min_num_spines,
             "num_hidden_layer": num_hidden_layer,
@@ -167,13 +277,13 @@ def main():
             "in_shape": in_shape,
             "out_shape": out_shape,
             "dataset_name": dataset,
+            "data_root": config["data_root"],
             "seq_len": seq_len,
             "spat_ds": spat_ds_fac,
             "batch_size": batch_size,
             "lr": lr,
             "output_decoder": output_decoder,
             "binary_data": binary_data,
-            "net_type": net_type,
             "dropout": dropout,
             "seed": seed,
             "lr_scheduled": lr_scheduled,
@@ -208,7 +318,9 @@ def main():
             "parallel_sequences": parallel_sequences,
             "refrac_period": refrac_period,
         }
-        tbl_rewiring = TensorBoardLogger(save_dir=logs_folder, name=(folder_name + "/rewiring"))
+        tbl_rewiring = TensorBoardLogger(
+            save_dir=logs_folder, name=(folder_name + "/rewiring")
+        )
         hyperparameters_path = f"{tbl_rewiring.log_dir}/hyperparameters.save"
         os.makedirs(os.path.dirname(hyperparameters_path), exist_ok=True)
         joblib.dump(hyperparameters, hyperparameters_path)
@@ -219,34 +331,32 @@ def main():
                     f"{load_checkpoint_folder}/hyperparameters.save"
                 )
             except FileNotFoundError:
-                hyperparameters = yaml.safe_load(open(f"{load_checkpoint_folder}/hparams.yaml"))
+                hyperparameters = yaml.safe_load(
+                    open(f"{load_checkpoint_folder}/hparams.yaml")
+                )
             target_num_frozen_units = hyperparameters["num_hidden_units"]
             num_classes = hyperparameters["out_shape"]
 
         print("Defining network...")
-        if hyperparameters["net_type"] == "den":
-            if not isinstance(hyperparameters["num_spines"], list):
-                net_rewiring = DendroNN(
-                    num_spines=hyperparameters["num_spines"],
-                    min_num_spines=hyperparameters["min_num_spines"],
-                    num_hidden_layer=hyperparameters["num_hidden_layer"],
-                    num_hidden_units=hyperparameters["num_seaching_units"],
-                    max_seq_len=hyperparameters["max_seq_len"],
-                    spike_acceptance_window=hyperparameters["spike_acceptance_window"],
-                    in_shape=hyperparameters["in_shape"],
-                    out_shape=hyperparameters["out_shape"],
-                    batch_size=hyperparameters["batch_size"],
-                    hyperparameters=hyperparameters,
-                    dropout_p=hyperparameters["dropout"],
-                    bias=hyperparameters["output_bias"],
-                    refrac_period=hyperparameters["refrac_period"],
-                    parallel_sequences=hyperparameters["parallel_sequences"],
-                )
-            else:
-                raise Exception(f"Ambiguous length of sequences.")
-        else:
-            raise Exception(f"Net type {net_type} unknown.")
-        
+        if isinstance(hyperparameters["num_spines"], list):
+            raise Exception("Ambiguous length of sequences.")
+        net_rewiring = DendroNN(
+            num_spines=hyperparameters["num_spines"],
+            min_num_spines=hyperparameters["min_num_spines"],
+            num_hidden_layer=hyperparameters["num_hidden_layer"],
+            num_hidden_units=hyperparameters["num_seaching_units"],
+            max_seq_len=hyperparameters["max_seq_len"],
+            spike_acceptance_window=hyperparameters["spike_acceptance_window"],
+            in_shape=hyperparameters["in_shape"],
+            out_shape=hyperparameters["out_shape"],
+            batch_size=hyperparameters["batch_size"],
+            hyperparameters=hyperparameters,
+            dropout_p=hyperparameters["dropout"],
+            bias=hyperparameters["output_bias"],
+            refrac_period=hyperparameters["refrac_period"],
+            parallel_sequences=hyperparameters["parallel_sequences"],
+        )
+
         if GPU:
             acc = "gpu"
             devices = [DEVICE]  # 0 or 1
@@ -264,35 +374,51 @@ def main():
                 upper_longevity_threshold=hyperparameters["thr_high"],
                 penalty_fac=hyperparameters["penalty_fac"],
                 dataset=hyperparameters["dataset_name"],
-                class_selectivity_threshold=hyperparameters["class_selectivity_threshold"],
-                selectivity_gap_to_other_classes=hyperparameters["selectivity_gap_to_other_classes"],
+                class_selectivity_threshold=hyperparameters[
+                    "class_selectivity_threshold"
+                ],
+                selectivity_gap_to_other_classes=hyperparameters[
+                    "selectivity_gap_to_other_classes"
+                ],
                 experiment_mode=hyperparameters["experiment_mode"],
             )
-
 
             if load_checkpoint_folder:
                 # list all files in the folder that end with .ckpt
                 checkpoint_files = [
-                    f for f in os.listdir(load_checkpoint_folder + "/checkpoints") if f.endswith(".ckpt")
+                    f
+                    for f in os.listdir(load_checkpoint_folder + "/checkpoints")
+                    if f.endswith(".ckpt")
                 ]
                 rewiring_checkpoint = checkpoint_files[0]  # should just be one
-                model_dict = torch.load(f"{load_checkpoint_folder}/checkpoints/{rewiring_checkpoint}", map_location=f"cuda:{DEVICE}")  # load checkpoint
+                model_dict = torch.load(
+                    f"{load_checkpoint_folder}/checkpoints/{rewiring_checkpoint}",
+                    map_location=device_target,
+                )
                 try:
-                    actual_batch_size = model_dict['state_dict']['model.units.0.expected_spikes_update_mask'].shape[0]
+                    actual_batch_size = model_dict["state_dict"][
+                        "model.units.0.expected_spikes_update_mask"
+                    ].shape[0]
                 except KeyError:
-                    actual_batch_size = model_dict['state_dict']['model.units.0.zeros_buffer'].shape[0]
+                    actual_batch_size = model_dict["state_dict"][
+                        "model.units.0.zeros_buffer"
+                    ].shape[0]
                 for i in range(model_rewiring.model.num_hidden_layer):
                     model_rewiring.model.units[str(i)].batch_size = actual_batch_size
-                    model_rewiring.model.units[str(i)].reset(f"cuda:{DEVICE}")
-                del model_dict["state_dict"]["frozen_label_stats"]  # remove best model state dict to avoid size mismatch
-                model_rewiring.load_state_dict(model_dict["state_dict"], strict=False)  # load model state dict from checkpoint
-                
+                    model_rewiring.model.units[str(i)].reset(device_target)
+                del model_dict["state_dict"][
+                    "frozen_label_stats"
+                ]  # remove best model state dict to avoid size mismatch
+                model_rewiring.load_state_dict(
+                    model_dict["state_dict"], strict=False
+                )  # load model state dict from checkpoint
+
             if load_checkpoint_folder is None or CONTINUE_REWIRING_FROM_CKPT:
                 joblib.dump(hyperparameters, hyperparameters_path)
 
                 print("Defining lightning trainer...")
                 trainer_rewiring = Trainer(
-                    max_epochs=10000000,
+                    max_epochs=config["max_rewiring_epochs"],
                     accelerator=acc,
                     devices=devices,
                     log_every_n_steps=1,
@@ -307,27 +433,50 @@ def main():
                 surrogate_labels = None
                 try:
                     while model_rewiring.actively_searched_classes.sum() > 0:
-                        collate_fn_rewiring = OnlySomeClassesCollateFn(class_ids=model_rewiring.actively_searched_classes.nonzero().squeeze(1).tolist(), rename_labels=rename_labels, slice_amounts=slice_input_by_amount, num_slices=num_slices, slicing_thrs=slicing_thrs, slicing_thrs_maxs=slicing_thrs_maxs, include_zero_slice=include_zero_slice, surrogate_labels=surrogate_labels, padding_len=padding_size, permute_data=permute_data, permutation_seed=permutation_seed,
-                                                                        #    jitter_std=jitter_level, dropout_prob=dropout_level, poisson_lambda=poisson_level
-                                                                           )
+                        collate_fn_rewiring = OnlySomeClassesCollateFn(
+                            class_ids=model_rewiring.actively_searched_classes.nonzero()
+                            .squeeze(1)
+                            .tolist(),
+                            rename_labels=rename_labels,
+                            slice_amounts=slice_input_by_amount,
+                            num_slices=num_slices,
+                            slicing_thrs=slicing_thrs,
+                            slicing_thrs_maxs=slicing_thrs_maxs,
+                            include_zero_slice=include_zero_slice,
+                            surrogate_labels=surrogate_labels,
+                            padding_len=padding_size,
+                            permute_data=permute_data,
+                            permutation_seed=permutation_seed,
+                            jitter_std=jitter_level,
+                            dropout_prob=dropout_level,
+                            poisson_lambda=poisson_level,
+                        )
                         train_loader_rewiring = DataLoader(
                             total_train_data,
                             batch_size=batch_size,
                             shuffle=True,
-                            num_workers=2,
+                            num_workers=config["num_workers"],
                             collate_fn=collate_fn_rewiring,
                             drop_last=True,
                         )
 
-                        trainer_rewiring.fit(model_rewiring, train_loader_rewiring, train_loader)  # use train_loader for validation (only stats calculation)
+                        trainer_rewiring.fit(
+                            model_rewiring, train_loader_rewiring, train_loader
+                        )  # use train_loader for validation (only stats calculation)
                         trainer_rewiring.should_stop = False
-                        
+
                         time.sleep(1)  # wait for a second to enable keyboard interrupt
                 except KeyboardInterrupt:
-                    print("Rewiring training interrupted by user. Proceeding to supervised phase...")
+                    print(
+                        "Rewiring training interrupted by user. Proceeding to supervised phase..."
+                    )
                     sys.exit(0)
-                model_rewiring.final_validation = True  # set final validation to True to get final label stats
-                trainer_rewiring.validate(model_rewiring, train_loader)  # validate on full training set to get final label stats
+                model_rewiring.final_validation = (
+                    True  # set final validation to True to get final label stats
+                )
+                trainer_rewiring.validate(
+                    model_rewiring, train_loader
+                )  # validate on full training set to get final label stats
             print("Rewiring learning phase finished.\n")
 
         if SUPERVISED:
@@ -353,15 +502,46 @@ def main():
             )
 
             if REWIRING:
-                net.hidden_layer["0"].synapse_mask[:(model_rewiring.frozen_units.sum() * hyperparameters["num_spines"])] = net_rewiring.hidden_layer["0"].synapse_mask[model_rewiring.frozen_units.repeat_interleave(hyperparameters["num_spines"])].clone()
-                net.units["0"].inter_spike_intervals[:model_rewiring.frozen_units.sum(), :] = net_rewiring.units["0"].inter_spike_intervals[model_rewiring.frozen_units].clone()
-                net.units["0"].sequence_len_dist_rep[:model_rewiring.frozen_units.sum()] = net_rewiring.units["0"].sequence_len_dist_rep[model_rewiring.frozen_units].clone()
-                print("Successfully transferred frozen units from rewiring model to supervised model.\n")
+                net.hidden_layer["0"].synapse_mask[
+                    : (
+                        model_rewiring.frozen_units.sum()
+                        * hyperparameters["num_spines"]
+                    )
+                ] = (
+                    net_rewiring.hidden_layer["0"]
+                    .synapse_mask[
+                        model_rewiring.frozen_units.repeat_interleave(
+                            hyperparameters["num_spines"]
+                        )
+                    ]
+                    .clone()
+                )
+                net.units["0"].inter_spike_intervals[
+                    : model_rewiring.frozen_units.sum(), :
+                ] = (
+                    net_rewiring.units["0"]
+                    .inter_spike_intervals[model_rewiring.frozen_units]
+                    .clone()
+                )
+                net.units["0"].sequence_len_dist_rep[
+                    : model_rewiring.frozen_units.sum()
+                ] = (
+                    net_rewiring.units["0"]
+                    .sequence_len_dist_rep[model_rewiring.frozen_units]
+                    .clone()
+                )
+                print(
+                    "Successfully transferred frozen units from rewiring model to supervised model.\n"
+                )
 
-        if SUPERVISED:            
-            tbl = TensorBoardLogger(save_dir=logs_folder, name=(folder_name + "/supervised"))
+        if SUPERVISED:
+            tbl = TensorBoardLogger(
+                save_dir=logs_folder, name=(folder_name + "/supervised")
+            )
             cvl = CSVLogger(
-                save_dir=logs_folder, name=(folder_name + "/supervised"), version=tbl.version
+                save_dir=logs_folder,
+                name=(folder_name + "/supervised"),
+                version=tbl.version,
             )
 
             checkpoint_callback_val_acc = ModelCheckpoint(
@@ -382,23 +562,29 @@ def main():
             )
             callbacks = []
             if val_loader is not None:
-                callbacks.extend([
-                    EarlyStopping(
-                        monitor="val_loss",
-                        min_delta=0.00,
-                        patience=30,
-                        verbose=False,
-                        mode="min",
-                    ),
-                    checkpoint_callback_val_acc,
-                ])
+                callbacks.extend(
+                    [
+                        EarlyStopping(
+                            monitor="val_loss",
+                            min_delta=0.00,
+                            patience=30,
+                            verbose=False,
+                            mode="min",
+                        ),
+                        checkpoint_callback_val_acc,
+                    ]
+                )
             else:
-                callbacks.extend([
-                    checkpoint_callback_train_acc,
-                ])
-            callbacks.extend([
-                ConfusionMatrixPlotterCallback(log_path=tbl.log_dir),
-            ])
+                callbacks.extend(
+                    [
+                        checkpoint_callback_train_acc,
+                    ]
+                )
+            callbacks.extend(
+                [
+                    ConfusionMatrixPlotterCallback(log_path=tbl.log_dir),
+                ]
+            )
 
             model = SpikingNetwork(
                 net,
@@ -415,15 +601,21 @@ def main():
                 checkpoint_files = [
                     f for f in os.listdir(load_checkpoint_folder) if f.endswith(".ckpt")
                 ]
-                supervised_checkpoint = [f for f in checkpoint_files if "val_loss" in f][0]
-                model_dict = torch.load(f"{load_checkpoint_folder}/{supervised_checkpoint}", map_location=f"cuda:{DEVICE}")  # load checkpoint
+                supervised_checkpoint = [
+                    f for f in checkpoint_files if "val_loss" in f
+                ][0]
+                model_dict = torch.load(
+                    f"{load_checkpoint_folder}/{supervised_checkpoint}",
+                    map_location=device_target,
+                )
 
-                model.load_state_dict(model_dict["state_dict"])  # load model state dict from checkpoint
-
+                model.load_state_dict(
+                    model_dict["state_dict"]
+                )  # load model state dict from checkpoint
 
             print("Defining lightning trainer...")
             if val_loader is not None:
-                max_epochs = 1000000  # unreasonably high number of epochs to ensure training continues until stopped by EarlyStopping
+                max_epochs = config["max_supervised_epochs"]
             else:
                 max_epochs = 200
             trainer = Trainer(
@@ -462,7 +654,7 @@ def main():
             else:
                 loader_for_eval = val_loader
             # Test both original and compressed models
-            pruning_level = 0.7
+            pruning_level = config["pruning_level"]
             test_results = test_model_with_compression(
                 model=model,
                 test_loader=loader_for_eval,
@@ -475,16 +667,20 @@ def main():
                 acc=acc,
                 devices=devices,
                 pruning_level=pruning_level,  # fraction of output weights to prune
-                bit_width=8,        # for integer quantization of output weights
-                device=DEVICE
+                bit_width=config["bit_width"],
+                device=DEVICE,
             )
-            
+
             print(f"Test Results Summary:")
-            print(f"  Original accuracy: {test_results['original'].get('test_acc', 'N/A')}")
-            print(f"  Compressed accuracy: {test_results['compressed'].get('test_acc', 'N/A')}")
-            if 'original' in test_results and 'compressed' in test_results:
-                orig_acc = test_results['original'].get('test_acc', 0)
-                comp_acc = test_results['compressed'].get('test_acc', 0)
+            print(
+                f"  Original accuracy: {test_results['original'].get('test_acc', 'N/A')}"
+            )
+            print(
+                f"  Compressed accuracy: {test_results['compressed'].get('test_acc', 'N/A')}"
+            )
+            if "original" in test_results and "compressed" in test_results:
+                orig_acc = test_results["original"].get("test_acc", 0)
+                comp_acc = test_results["compressed"].get("test_acc", 0)
                 if orig_acc > 0:
                     acc_retention = (comp_acc / orig_acc) * 100
                     print(f"  Accuracy retention: {acc_retention:.2f}%")
@@ -492,4 +688,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-    

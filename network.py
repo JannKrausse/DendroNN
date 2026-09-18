@@ -8,21 +8,21 @@ from dendronn_hidden_layers import DendroNNHiddenLayer
 
 class DendroNN(nn.Module):
     def __init__(
-            self,
-            num_spines,
-            num_hidden_layer,
-            num_hidden_units,
-            max_seq_len,
-            in_shape,
-            out_shape,
-            batch_size,
-            hyperparameters,
-            spike_acceptance_window=2,  # max_time to receive input spike
-            dropout_p=0.,
-            bias=False,
-            min_num_spines=None,  # lower bound for possible sequence lengths in case they are distributed
-            refrac_period=False,
-            parallel_sequences=True,
+        self,
+        num_spines,
+        num_hidden_layer,
+        num_hidden_units,
+        max_seq_len,
+        in_shape,
+        out_shape,
+        batch_size,
+        hyperparameters,
+        spike_acceptance_window=2,  # max_time to receive input spike
+        dropout_p=0.0,
+        bias=False,
+        min_num_spines=None,  # lower bound for possible sequence lengths in case they are distributed
+        refrac_period=False,
+        parallel_sequences=True,
     ):
         super().__init__()
         self.num_spines = num_spines
@@ -42,11 +42,20 @@ class DendroNN(nn.Module):
 
         # initialization of inter-spike intervals
         delay_size = (num_hidden_layer, num_hidden_units, max(num_spines - 1, 1))
-        effective_seq_len = self.spike_acceptance_window * num_spines  # (max_)seq_len without inhibition / delay
-        self.inter_spike_intervals = torch.randint(low=0,
-                                                high=max(int((hyperparameters["max_seq_len"] -
-                                                        effective_seq_len) / (max(num_spines - 1, 1))), 1),
-                                                size=delay_size)
+        effective_seq_len = (
+            self.spike_acceptance_window * num_spines
+        )  # (max_)seq_len without inhibition / delay
+        self.inter_spike_intervals = torch.randint(
+            low=0,
+            high=max(
+                int(
+                    (hyperparameters["max_seq_len"] - effective_seq_len)
+                    / (max(num_spines - 1, 1))
+                ),
+                1,
+            ),
+            size=delay_size,
+        )
         self.max_seq_len = self.inter_spike_intervals.sum(-1) + effective_seq_len
 
         self.hidden_layer = nn.ModuleDict()
@@ -56,9 +65,9 @@ class DendroNN(nn.Module):
                 num_in_units = in_shape
             else:
                 num_in_units = self.num_hidden_units
-            self.hidden_layer[str(i)] = DendroNNHiddenLayer(num_in_units,
-                                                             self.num_hidden_units,
-                                                             self.num_spines)
+            self.hidden_layer[str(i)] = DendroNNHiddenLayer(
+                num_in_units, self.num_hidden_units, self.num_spines
+            )
             inter_spike_intervals_ = self.inter_spike_intervals[i, :]
             max_seq_len_ = self.max_seq_len[i, :]
             self.units[str(i)] = DendroNNUnit(
@@ -77,9 +86,11 @@ class DendroNN(nn.Module):
         else:
             num_in_units = in_shape
         self.hidden_layer["out"] = nn.Linear(num_in_units, out_shape, bias=bias)
-        self.units["out"] = SimpleQuantizedIntegrator(quantize=False,  # quantization will be enabled later during compression
-                                                      bit_width=16,
-                                                      symmetric=True)
+        self.units["out"] = SimpleQuantizedIntegrator(
+            quantize=False,  # quantization will be enabled later during compression
+            bit_width=16,
+            symmetric=True,
+        )
 
         self.testing = False
         self.dropout = nn.Dropout(dropout_p)
@@ -95,11 +106,15 @@ class DendroNN(nn.Module):
         predictions, spikes_output = self.output_pass(z, seq_len)
 
         if not spikes_output == []:
-            spikes = torch.stack([spikes_hidden, spikes_output.unsqueeze(dim=1)])  # dim=1 is layer dim of spikes_hidden
+            spikes = torch.stack(
+                [spikes_hidden, spikes_output.unsqueeze(dim=1)]
+            )  # dim=1 is layer dim of spikes_hidden
         elif not spikes_hidden == []:
             spikes = spikes_hidden
         else:
-            spikes = torch.zeros((seq_len, self.num_hidden_layer, batch_size, self.num_hidden_units))
+            spikes = torch.zeros(
+                (seq_len, self.num_hidden_layer, batch_size, self.num_hidden_units)
+            )
 
         return predictions, spikes.to(predictions.device)
 
@@ -109,7 +124,9 @@ class DendroNN(nn.Module):
         if x.max() > 1.0:
             raise ValueError("Input values should be binary.")
 
-        refrac_period_mask = torch.ones((batch_size, self.num_hidden_units), device=x.device)
+        refrac_period_mask = torch.ones(
+            (batch_size, self.num_hidden_units), device=x.device
+        )
 
         output = []
         spikes = []
@@ -151,8 +168,10 @@ class DendroNN(nn.Module):
             z = self.hidden_layer["out"](z)
 
             z = self.dropout(z)
-                
-            _, mem = self.units["out"](z, mem)  # first output is spikes of parent class of integrator unit
+
+            _, mem = self.units["out"](
+                z, mem
+            )  # first output is spikes of parent class of integrator unit
             z = mem
 
             # z = torch.nn.functional.softmax(z, dim=-1)
