@@ -64,7 +64,7 @@ The seed is part of each YAML configuration and is recorded in the experiment hy
 
 ## NeuroMorse
 
-To run NeuroMorse experiments, obtain the external NeuroMorse data repository and place its loader under `neuromorse_data/`, then follow its data preparation instructions. When the NeuroMorse dataloader is created, the code checks for `neuromorse_data/NeuroMorse/data/corpus.txt` and downloads only that file from the upstream repository if it is missing. The validation file and prepared train/test data are not bundled here and must still be provided separately.
+To run NeuroMorse experiments, the first attempt to create the dataloader clones the complete [upstream NeuroMorse repository](https://github.com/Ben-E-Walters/NeuroMorse) into `neuromorse_data/NeuroMorse/` when that directory is absent. This requires Git and network access. The prepared train/test HDF5 files are not bundled here and must still be provided separately.
 
 ## Citation
 

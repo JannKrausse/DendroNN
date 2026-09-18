@@ -4,35 +4,64 @@ from torch.utils.data import TensorDataset
 import numpy as np
 import string
 from pathlib import Path
-from shutil import copyfileobj
-from urllib.request import urlopen
+import subprocess
+import tempfile
 
 
-CORPUS_URL = (
-    "https://raw.githubusercontent.com/Ben-E-Walters/NeuroMorse/main/data/corpus.txt"
-)
+NEUROMORSE_REPOSITORY = "https://github.com/Ben-E-Walters/NeuroMorse.git"
+
+
+def _ensure_neuromorse_project():
+    project_dir = Path(__file__).resolve().parent / "NeuroMorse"
+    if (
+        project_dir.is_dir()
+        and (project_dir / "README.md").is_file()
+        and (project_dir / "data").is_dir()
+    ):
+        return project_dir
+
+    project_dir.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory() as temporary_directory:
+        temporary_project_dir = Path(temporary_directory) / "NeuroMorse"
+        try:
+            subprocess.run(
+                [
+                    "git",
+                    "clone",
+                    "--depth",
+                    "1",
+                    NEUROMORSE_REPOSITORY,
+                    str(temporary_project_dir),
+                ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+        except (FileNotFoundError, subprocess.CalledProcessError) as error:
+            details = getattr(error, "stderr", "") or str(error)
+            raise RuntimeError(
+                "The NeuroMorse project is missing and could not be cloned. "
+                f"Install Git and ensure network access to {NEUROMORSE_REPOSITORY}. "
+                f"Details: {details.strip()}"
+            ) from error
+
+        if project_dir.exists():
+            raise RuntimeError(
+                f"NeuroMorse directory exists but is incomplete: {project_dir}. "
+                "Remove it or provide the complete upstream NeuroMorse project."
+            )
+        temporary_project_dir.rename(project_dir)
+
+    return project_dir
 
 
 def _ensure_corpus_file():
-    data_dir = Path(__file__).resolve().parent / "NeuroMorse" / "data"
-    corpus_path = data_dir / "corpus.txt"
-    if corpus_path.is_file() and corpus_path.stat().st_size > 0:
-        return corpus_path
-
-    data_dir.mkdir(parents=True, exist_ok=True)
-    temporary_path = corpus_path.with_suffix(".txt.download")
-    try:
-        with urlopen(CORPUS_URL, timeout=30) as response, temporary_path.open(
-            "wb"
-        ) as output_file:
-            copyfileobj(response, output_file)
-        temporary_path.replace(corpus_path)
-    except Exception as error:
-        temporary_path.unlink(missing_ok=True)
-        raise RuntimeError(
-            f"NeuroMorse corpus is missing and could not be downloaded from {CORPUS_URL}."
-        ) from error
-
+    project_dir = _ensure_neuromorse_project()
+    corpus_path = project_dir / "data" / "corpus.txt"
+    if not corpus_path.is_file() or corpus_path.stat().st_size == 0:
+        raise FileNotFoundError(
+            f"The NeuroMorse project was cloned, but its corpus is missing: {corpus_path}"
+        )
     return corpus_path
 
 
