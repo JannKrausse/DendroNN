@@ -4,11 +4,26 @@ from torch.utils.data import TensorDataset
 import numpy as np
 import string
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 
 
 NEUROMORSE_REPOSITORY = "https://github.com/Ben-E-Walters/NeuroMorse.git"
+
+
+def _require_git_lfs():
+    if shutil.which("git") is None:
+        raise RuntimeError(
+            "The NeuroMorse project is missing and Git is not installed. "
+            "Install Git before running a NeuroMorse experiment."
+        )
+    if shutil.which("git-lfs") is None:
+        raise RuntimeError(
+            "The NeuroMorse project is missing and Git LFS is not installed. "
+            "Install Git LFS and run 'git lfs install' before running a "
+            "NeuroMorse experiment."
+        )
 
 
 def _ensure_neuromorse_project():
@@ -20,6 +35,7 @@ def _ensure_neuromorse_project():
     ):
         return project_dir
 
+    _require_git_lfs()
     project_dir.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory() as temporary_directory:
         temporary_project_dir = Path(temporary_directory) / "NeuroMorse"
@@ -33,6 +49,12 @@ def _ensure_neuromorse_project():
                     NEUROMORSE_REPOSITORY,
                     str(temporary_project_dir),
                 ],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "-C", str(temporary_project_dir), "lfs", "pull"],
                 check=True,
                 capture_output=True,
                 text=True,
@@ -62,7 +84,18 @@ def _ensure_corpus_file():
         raise FileNotFoundError(
             f"The NeuroMorse project was cloned, but its corpus is missing: {corpus_path}"
         )
+    _reject_lfs_pointer(corpus_path, project_dir)
     return corpus_path
+
+
+def _reject_lfs_pointer(path, project_dir):
+    with path.open("rb") as corpus_file:
+        first_line = corpus_file.readline()
+    if first_line.startswith(b"version https://git-lfs.github.com/spec/v1"):
+        raise RuntimeError(
+            f"NeuroMorse data is a Git LFS pointer instead of the actual file: "
+            f"{path}. Run 'git lfs pull' in {project_dir}."
+        )
 
 
 def create_neuromorse_dataset():
@@ -348,6 +381,7 @@ def create_neuromorse_dataset():
     ############################################ MY ADDITION: basically code for test data, but for the validation.txt
     # Load validation.txt
     validation_path = corpus_path.parent / "Validation" / "validation.txt"
+    _reject_lfs_pointer(validation_path, corpus_path.parent.parent)
     with validation_path.open("r", encoding="utf8") as f:
         validation_subset = f.read().lower().split()
 

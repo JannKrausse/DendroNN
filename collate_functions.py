@@ -93,10 +93,13 @@ class CollateFN:
             try:
                 input_data = torch.tensor(np.asarray(input_data))
             except ValueError:  # inputs need to be padded
+                batch_padding_len = max(
+                    self.padding_len, max(arr.shape[0] for arr in input_data)
+                )
                 input_data = tuple(
                     np.pad(
                         arr,
-                        pad_width=[(0, self.padding_len - arr.shape[0])]
+                        pad_width=[(0, batch_padding_len - arr.shape[0])]
                         + [(0, 0)] * (arr.ndim - 1),
                         mode="constant",
                     )

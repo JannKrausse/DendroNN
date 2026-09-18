@@ -64,7 +64,13 @@ The seed is part of each YAML configuration and is recorded in the experiment hy
 
 ## NeuroMorse
 
-To run NeuroMorse experiments, the first attempt to create the dataloader clones the complete [upstream NeuroMorse repository](https://github.com/Ben-E-Walters/NeuroMorse) into `neuromorse_data/NeuroMorse/` when that directory is absent. This requires Git and network access. The prepared train/test HDF5 files are not bundled here and must still be provided separately.
+To run NeuroMorse experiments, the first attempt to create the dataloader clones the complete [upstream NeuroMorse repository](https://github.com/Ben-E-Walters/NeuroMorse) into `neuromorse_data/NeuroMorse/` when that directory is absent. This requires Git, Git LFS, and network access. Install Git LFS using your operating system's package manager, then initialize it with:
+
+```bash
+git lfs install
+```
+
+The loader downloads the upstream Git LFS data during the clone. The prepared train/test HDF5 files are external data and require sufficient disk space; if an existing checkout contains LFS pointer files, run `git lfs pull` from `neuromorse_data/NeuroMorse/`.
 
 ## Citation
 
