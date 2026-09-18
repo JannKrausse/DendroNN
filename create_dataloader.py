@@ -181,13 +181,13 @@ def create_dataloaders(
         no_aug_transform = torchvision.transforms.ToTensor()
 
         aug_train_and_val_dataset = torchvision.datasets.MNIST(
-            root=data_root, train=True, transform=aug_transform
+            root=data_root, train=True, transform=aug_transform, download=True
         )
         no_aug_train_and_val_dataset = torchvision.datasets.MNIST(
-            root=data_root, train=True, transform=no_aug_transform
+            root=data_root, train=True, transform=no_aug_transform, download=True
         )
         test_dataset = torchvision.datasets.MNIST(
-            root=data_root, train=False, transform=no_aug_transform
+            root=data_root, train=False, transform=no_aug_transform, download=True
         )
 
         # split into train and val data

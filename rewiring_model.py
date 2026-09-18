@@ -16,7 +16,7 @@ warnings.filterwarnings("ignore", module="pytorch_lightning")
 
 class RewiringProgressCallback(Callback):
     def on_train_batch_end(
-        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx
+        self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0
     ):
         # Log the current epoch and frozen units
         print(f"Max of longevity: {pl_module.longevity.max()}")

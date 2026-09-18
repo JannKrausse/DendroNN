@@ -54,12 +54,7 @@ SHD and MNIST-family datasets are downloaded or read below `data_root`. NeuroMor
 
 ## Hardware and runtime
 
-The paper experiments were run on: **TODO: record GPU model, GPU count, and system RAM**.
-
-For a representative paper configuration, record the measured runtime separately as:
-
-- Rewiring: **TODO: measured wall-clock duration**
-- Supervised training: **TODO: measured wall-clock duration**
+The paper experiments were run on a single NVIDIA RTX 6000 Ada Generation/A6000. Runtime depends on the selected dataset configuration, hardware, and number of runs; this repository does not prescribe a fixed wall-clock duration for either rewiring or supervised training. Depending on the chosen selectivity criterion, rewiring can last anywhere between a single batch and hundreds of epochs. However, the supervised training duration depends on the user's configuration.
 
 The rewiring phase allocates large intermediate buffers and is not expected to run comfortably on a small GPU. Use `--device cpu` only for configuration and smoke checks unless the machine has sufficient memory.
 
@@ -69,7 +64,7 @@ The seed is part of each YAML configuration and is recorded in the experiment hy
 
 ## NeuroMorse
 
-To run NeuroMorse experiments, obtain the external NeuroMorse data repository and place its loader under `neuromorse_data/`, then follow its data preparation instructions. The data files themselves are not bundled here.
+To run NeuroMorse experiments, obtain the external NeuroMorse data repository and place its loader under `neuromorse_data/`, then follow its data preparation instructions. When the NeuroMorse dataloader is created, the code checks for `neuromorse_data/NeuroMorse/data/corpus.txt` and downloads only that file from the upstream repository if it is missing. The validation file and prepared train/test data are not bundled here and must still be provided separately.
 
 ## Citation
 

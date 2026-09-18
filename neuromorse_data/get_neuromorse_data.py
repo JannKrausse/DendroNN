@@ -3,9 +3,41 @@ import torch.nn.functional as F
 from torch.utils.data import TensorDataset
 import numpy as np
 import string
+from pathlib import Path
+from shutil import copyfileobj
+from urllib.request import urlopen
+
+
+CORPUS_URL = (
+    "https://raw.githubusercontent.com/Ben-E-Walters/NeuroMorse/main/data/corpus.txt"
+)
+
+
+def _ensure_corpus_file():
+    data_dir = Path(__file__).resolve().parent / "NeuroMorse" / "data"
+    corpus_path = data_dir / "corpus.txt"
+    if corpus_path.is_file() and corpus_path.stat().st_size > 0:
+        return corpus_path
+
+    data_dir.mkdir(parents=True, exist_ok=True)
+    temporary_path = corpus_path.with_suffix(".txt.download")
+    try:
+        with urlopen(CORPUS_URL, timeout=30) as response, temporary_path.open(
+            "wb"
+        ) as output_file:
+            copyfileobj(response, output_file)
+        temporary_path.replace(corpus_path)
+    except Exception as error:
+        temporary_path.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"NeuroMorse corpus is missing and could not be downloaded from {CORPUS_URL}."
+        ) from error
+
+    return corpus_path
 
 
 def create_neuromorse_dataset():
+    corpus_path = _ensure_corpus_file()
     # Create a Morse code dataset.
     Morse_Dict = {
         "a": ".-",
@@ -184,7 +216,7 @@ def create_neuromorse_dataset():
         TrainSpikeDataset.append(data_neuro)
 
     # Load a little bit of the corpus (test data)
-    with open("neuromorse_data/NeuroMorse/data/corpus.txt", "r", encoding="utf8") as f:
+    with corpus_path.open("r", encoding="utf8") as f:
         corpus = f.read().lower().split()
 
     # Select a random subset of words from the corpus, bit slow to load the whole thing.
@@ -286,11 +318,8 @@ def create_neuromorse_dataset():
 
     ############################################ MY ADDITION: basically code for test data, but for the validation.txt
     # Load validation.txt
-    with open(
-        "neuromorse_data/NeuroMorse/data/Validation/validation.txt",
-        "r",
-        encoding="utf8",
-    ) as f:
+    validation_path = corpus_path.parent / "Validation" / "validation.txt"
+    with validation_path.open("r", encoding="utf8") as f:
         validation_subset = f.read().lower().split()
 
     # Remove punctuation from each word
