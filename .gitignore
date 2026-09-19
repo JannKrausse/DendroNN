@@ -1,18 +1,12 @@
-*logs
-__pycache__
-.idea
-figs_verification_parallel_seqs/*
-CurrentOptunaStudyDump/
-optuna_results/
-stats_pics/
-*.ckpt
+logs/
+__pycache__/
+.idea/
 .vscode/
-neuromorse_data/NeuroMorse/*
-neuromorse_data/TrainDataset.pckl
-old_figures/
-braille_data/
-optuna_studies/
-optuna_visualizations/
+data/
+neuromorse_data/NeuroMorse/
+
+# Generated training and experiment artifacts
+*.ckpt
 *.csv
 *.pkl
 *.mat

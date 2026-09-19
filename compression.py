@@ -117,7 +117,7 @@ def test_model_with_compression(
 
     # Create separate callbacks for compression testing
     compression_callbacks = [
-        ConfusionMatrixPlotterCallback(log_path=compressed_logger.log_dir),
+        ConfusionMatrixPlotterCallback(log_path=compression_logger.log_dir),
     ]
     compression_callbacks[0].quantized_model = True  # Mark as compressed model
 
@@ -129,7 +129,7 @@ def test_model_with_compression(
         log_every_n_steps=1,
         enable_progress_bar=True,
         callbacks=compression_callbacks,
-        logger=compressed_logger,
+        logger=compression_logger,
     )
     compressed_results = test_trainer.test(compressed_model, test_loader)
     results["compressed"] = compressed_results[0] if compressed_results else {}
@@ -152,11 +152,11 @@ def test_model_with_compression(
                 "percentage_nonzero_weights": compression_stats["density_percentage"],
             },
         },
-        f"{compressed_logger.log_dir}/compressed_model.ckpt",
+        f"{compression_logger.log_dir}/compressed_model.ckpt",
     )
 
     print(
-        f"Compressed model saved to: {compressed_logger.log_dir}/compressed_model.ckpt"
+        f"Compressed model saved to: {compression_logger.log_dir}/compressed_model.ckpt"
     )
 
     return results
