@@ -70,6 +70,12 @@ def test_model_with_compression(
     results["original"] = original_results[0] if original_results else {}
     print(f"Original model test accuracy: {results['original'].get('test_acc', 'N/A')}")
 
+    # Keep compression fine-tuning and evaluation in their own TensorBoard run.
+    compression_logger = TensorBoardLogger(
+        save_dir=logs_folder,
+        name=(folder_name + f"/compression_p{int(pruning_level * 100)}_q{bit_width}"),
+    )
+
     # Test compressed model
     print("Testing compressed model...")
 
@@ -94,7 +100,7 @@ def test_model_with_compression(
         val_loader,
         pruning_level,
         bit_width,
-        pruning_logger,
+        compression_logger,
         device=device,
     )
 
@@ -107,12 +113,6 @@ def test_model_with_compression(
     )
     print(
         f"  Target quantization: {bit_width} bits, Actual unique values: {compression_stats['num_unique_values']}"
-    )
-
-    # Create separate logger for compressed model testing
-    compressed_logger = TensorBoardLogger(
-        save_dir=logs_folder,
-        name=(compression_name + "/compressed"),
     )
 
     # Create separate callbacks for compression testing

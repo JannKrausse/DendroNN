@@ -2,6 +2,22 @@ import torch
 from torch.utils.data import random_split
 import tonic
 import numpy as np
+import numba
+
+
+@numba.njit(cache=True)
+def _denoise_event_mask(timestamps, channels, width, filter_time):
+    timestamp_memory = np.zeros(width, dtype=np.int64) + filter_time
+    keep = np.zeros(len(timestamps), dtype=np.bool_)
+    for index in range(len(timestamps)):
+        channel = int(channels[index])
+        timestamp = timestamps[index]
+        timestamp_memory[channel] = timestamp + filter_time
+        if (channel > 0 and timestamp_memory[channel - 1] > timestamp) or (
+            channel < width - 1 and timestamp_memory[channel + 1] > timestamp
+        ):
+            keep[index] = True
+    return keep
 
 
 class CustomAudioUniformNoiseTransform:
@@ -65,22 +81,11 @@ class CustomAudioDenoiseTransform:
         return denoised_events
 
     def tonic_call(self, events):
-        events_copy = np.zeros_like(events)
-        copy_index = 0
         width = int(events["x"].max()) + 1
-        timestamp_memory = np.zeros((width,)) + self.filter_time
-
-        for event in events:
-            x = int(event["x"])
-            t = event["t"]
-            timestamp_memory[x] = t + self.filter_time
-            if (x > 0 and timestamp_memory[x - 1] > t) or (
-                x < width - 1 and timestamp_memory[x + 1] > t
-            ):
-                events_copy[copy_index] = event
-                copy_index += 1
-
-        return events_copy[:copy_index]
+        keep = _denoise_event_mask(
+            events["t"], events["x"], width, self.filter_time
+        )
+        return events[keep]
 
     def call_thr(self, events):
         thr = 5
@@ -457,14 +462,15 @@ class TonicDataset:
                     f"For dataset {self.dataset_name} denoising is not implemented yet."
                 )
 
-        if self.denoise_mode == "tonic":
-            self.transforms = (
-                self.transforms[:-2] + [denoise_transform] + self.transforms[-2:]
-            )
-        elif self.denoise_mode == "thr":
-            self.transforms.extend([denoise_transform])
-        else:
-            raise Exception(f"Denoise mode {self.denoise_mode} is not supported.")
+        if self.denoise:
+            if self.denoise_mode == "tonic":
+                self.transforms = (
+                    self.transforms[:-2] + [denoise_transform] + self.transforms[-2:]
+                )
+            elif self.denoise_mode == "thr":
+                self.transforms.extend([denoise_transform])
+            else:
+                raise Exception(f"Denoise mode {self.denoise_mode} is not supported.")
 
         transform = tonic.transforms.Compose(self.transforms)
 

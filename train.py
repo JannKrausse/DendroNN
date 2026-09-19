@@ -135,7 +135,9 @@ def main():
         batch_size = config["batch_size"]
         time_window = config["time_window"]
         if dataset == "SHD":
-            padding_size = int(4 / time_window * 292)  # 292 is max sequence in
+            # SHD timestamps are expressed in microseconds; the original
+            # timescale table uses milliseconds.
+            padding_size = int(4 / (time_window / 1000) * 292)
             seq_len = padding_size
         elif "sMNIST" in dataset:  # sMNIST or p-sMNIST
             # padding_size = 14**2  # 28x28 images downsampled to 14x14
@@ -395,14 +397,26 @@ def main():
                     f"{load_checkpoint_folder}/checkpoints/{rewiring_checkpoint}",
                     map_location=device_target,
                 )
-                try:
-                    actual_batch_size = model_dict["state_dict"][
+                state_dict = model_dict["state_dict"]
+                old_synapse_mask_key = "model.hidden_layer.0.synapse_mask"
+                synapse_indices_key = "model.hidden_layer.0.synapse_indices"
+                if (
+                    synapse_indices_key not in state_dict
+                    and old_synapse_mask_key in state_dict
+                ):
+                    state_dict[synapse_indices_key] = state_dict[
+                        old_synapse_mask_key
+                    ].argmax(dim=1)
+                if "model.units.0.expected_spikes" in state_dict:
+                    actual_batch_size = state_dict[
+                        "model.units.0.expected_spikes"
+                    ].shape[0]
+                elif "model.units.0.expected_spikes_update_mask" in state_dict:
+                    actual_batch_size = state_dict[
                         "model.units.0.expected_spikes_update_mask"
                     ].shape[0]
-                except KeyError:
-                    actual_batch_size = model_dict["state_dict"][
-                        "model.units.0.zeros_buffer"
-                    ].shape[0]
+                else:
+                    actual_batch_size = state_dict["model.units.0.zeros_buffer"].shape[0]
                 for i in range(model_rewiring.model.num_hidden_layer):
                     model_rewiring.model.units[str(i)].batch_size = actual_batch_size
                     model_rewiring.model.units[str(i)].reset(device_target)
@@ -474,6 +488,7 @@ def main():
                 model_rewiring.final_validation = (
                     True  # set final validation to True to get final label stats
                 )
+                model_rewiring.collect_validation_stats = True
                 trainer_rewiring.validate(
                     model_rewiring, train_loader
                 )  # validate on full training set to get final label stats
@@ -502,14 +517,14 @@ def main():
             )
 
             if REWIRING:
-                net.hidden_layer["0"].synapse_mask[
+                net.hidden_layer["0"].synapse_indices[
                     : (
                         model_rewiring.frozen_units.sum()
                         * hyperparameters["num_spines"]
                     )
                 ] = (
                     net_rewiring.hidden_layer["0"]
-                    .synapse_mask[
+                    .synapse_indices[
                         model_rewiring.frozen_units.repeat_interleave(
                             hyperparameters["num_spines"]
                         )

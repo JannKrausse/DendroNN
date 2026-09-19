@@ -128,38 +128,20 @@ class CollateFN:
                 if self.slicing_thrs_maxs is None:
                     self.slicing_thrs_maxs = np.append(self.slicing_thrs[1:], np.inf)
 
-            if not self.include_zero_slice:
-                sliced_data = torch.zeros(
-                    (
-                        input_data.shape[0],
-                        input_data.shape[1],
-                        input_data.shape[2] * self.num_slices,
-                    )
-                )
-            else:
-                sliced_data = torch.zeros(
-                    (
-                        input_data.shape[0],
-                        input_data.shape[1],
-                        input_data.shape[2] * (self.num_slices + 1),
-                    )
-                )
-                sliced_data[
-                    :,
-                    :,
-                    input_data.shape[2]
-                    * self.num_slices : input_data.shape[2]
-                    * (self.num_slices + 1),
-                ] = (
-                    input_data == 0
-                )
-            for i in range(self.num_slices):
-                sliced_data[
-                    :, :, input_data.shape[2] * i : input_data.shape[2] * (i + 1)
-                ] = (input_data > self.slicing_thrs[i]) * (
-                    input_data < self.slicing_thrs_maxs[i]
-                )  # * (input_data > 0)
-            input_data = sliced_data
+            lower_bounds = input_data.new_tensor(self.slicing_thrs[: self.num_slices])
+            upper_bounds = input_data.new_tensor(
+                self.slicing_thrs_maxs[: self.num_slices]
+            )
+            sliced_data = (
+                (input_data.unsqueeze(-1) > lower_bounds)
+                & (input_data.unsqueeze(-1) < upper_bounds)
+            ).permute(0, 1, 3, 2)
+            if self.include_zero_slice:
+                zero_slice = (input_data == 0).unsqueeze(2)
+                sliced_data = torch.cat((sliced_data, zero_slice), dim=2)
+            input_data = sliced_data.reshape(
+                input_data.shape[0], input_data.shape[1], -1
+            ).to(torch.float32)
 
         # apply custom functions altered by inheriting classes
         input_data, targets = self.additional_stuff(input_data, targets)

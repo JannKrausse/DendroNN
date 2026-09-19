@@ -110,6 +110,7 @@ class RewiringModel(pl.LightningModule):
         self.prev_selective_units = None  # used to mitigate the deletion of previously found selective units with in the case of a low pen-rew
         self.prev_class_selective_units = {}
         self.final_validation = False
+        self.collect_validation_stats = False
         self.reset_idx = torch.tensor([])
         self.last_num_frozen_units = 0
 
@@ -155,7 +156,7 @@ class RewiringModel(pl.LightningModule):
         # Rewire units
         self.model.hidden_layer["0"].rewire_synapses(
             rewire_mask
-        )  # TODO: only for hidden layer 0
+        )
         self.longevity[rewire_mask] = 0  # Reset longevity for rewired units
         self.longevity[freeze_mask] = (
             0  # Reset longevity for frozen units (debugging purposes)
@@ -167,7 +168,7 @@ class RewiringModel(pl.LightningModule):
             seq_len=self.model.hyperparameters["seq_len"],
             dataset=self.dataset,
             class_ids=self.actively_searched_classes,
-        )  # TODO: only for hidden layer 0
+        )
         # Draw new sequence_lengths for rewired units
         self.model.units["0"].set_new_num_spines(rewire_mask=rewire_mask)
 
@@ -203,31 +204,6 @@ class RewiringModel(pl.LightningModule):
             ),  # Transpose to match dimensions
         )
 
-    def plot_label_stats(self):
-        plt.clf()
-        plt.imshow(
-            self.frozen_label_stats.detach().cpu().numpy(),
-            cmap="viridis",
-            aspect="auto",
-        )  # You can change 'viridis' to other colormaps like 'plasma', 'inferno', etc.
-        plt.colorbar()  # Add a colorbar to show the scale
-        plt.xlabel("class id")
-        plt.ylabel("unit id")
-        plt.legend(fontsize=8, loc="upper left", bbox_to_anchor=(0.8, 1.1))
-        if self.experiment_name is not None:
-            fig_path = "stats_pics/" + self.dataset + self.experiment_name + "/"
-            if not os.path.isdir(fig_path):
-                os.mkdir(fig_path)
-            plt.savefig(fig_path + f"{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}")
-
-    def get_data_stats(self, batch):
-        data, labels = batch
-        self.data_stats.scatter_add_(
-            0,  # Dimension to scatter along (rows for data)
-            labels,  # Labels for each sample == index
-            data.sum((0, 2)),
-        )
-
     def training_step(self, batch, batch_idx):
         # Perform random inference
         spikes = self.rewiring_step(batch)
@@ -238,7 +214,9 @@ class RewiringModel(pl.LightningModule):
             self.class_id = batch[1][0].item()
 
         # Increment sample counter
-        self.total_samples_processed += batch[0].size(1)  # batch size
+        # The collate function may filter the raw DataLoader batch to active
+        # classes, so count the samples that actually reached the model.
+        self.total_samples_processed += spikes.shape[1]
 
         # calc longevity
         self.calc_longevity(spikes)
@@ -253,25 +231,26 @@ class RewiringModel(pl.LightningModule):
             * self.actively_searched_classes.sum()
             * self.target_units_per_class.max()
         ):
-            self.validation_step = self.active_validation_step
-            self.validation_epoch_end = self.active_validation_epoch_end
+            self.collect_validation_stats = True
 
         # Return dummy loss (not used in rewiring phase)
         return torch.tensor(0.0, device=self.device, requires_grad=True)
 
-    def active_validation_step(self, batch, batch_idx):
+    def validation_step(self, batch, batch_idx):
+        if not self.collect_validation_stats and not self.final_validation:
+            return None
+
         # Perform random inference
         spikes = self.rewiring_step(batch)
         spikes = spikes[:, 0, :, :]
 
-        # calc statistics for debugging
-        self.get_data_stats(batch)
+        # calc statistics
         self.get_label_stats(spikes, batch[1])
 
-    def inactive_validation_step(self, batch, batch_idx):
-        """Empty Validation Step"""
+    def on_validation_epoch_end(self):
+        if not self.collect_validation_stats and not self.final_validation:
+            return
 
-    def active_validation_epoch_end(self, outputs):
         # get the label statistics for the frozen units
         label_stats_frozen = self.label_stats[self.frozen_units, :]
         temp_frozen_label_stats_idx = self.frozen_units.nonzero()
@@ -296,11 +275,6 @@ class RewiringModel(pl.LightningModule):
         ]
 
         self.evaluate_validation()
-        if self.final_validation:
-            self.plot_label_stats()
-
-    def inactive_validation_epoch_end(self, outputs):
-        """Empty Validation Epoch End"""
 
     def evaluate_validation(self):
         selective_units = torch.zeros_like(self.frozen_label_stats[:, 0]).to(
@@ -419,8 +393,7 @@ class RewiringModel(pl.LightningModule):
         self.longevity[filtered_reset_idx] = -float("inf")  # implicitly force
         self.reset_idx = torch.tensor([], device=self.device)
 
-        self.validation_step = self.inactive_validation_step
-        self.validation_epoch_end = self.inactive_validation_epoch_end
+        self.collect_validation_stats = False
 
         # check if all classes have been processed update frozen_label_stats to final frozen units
         if self.actively_searched_classes.sum() == 0:
@@ -631,8 +604,13 @@ class RewiringModel(pl.LightningModule):
             max=self.model.units["0"].inter_spike_intervals.max().item() + 1,
         )
 
-        self.model.hidden_layer["0"].synapse_mask[
-            rewire_mask.repeat_interleave(self.model.num_dendrites_per_neuron)
-        ] = sequence.to(device=self.model.device, dtype=torch.float).repeat(
-            (self.model.num_hidden_units, 1)
+        sequence_indices = sequence.nonzero(as_tuple=True)[0]
+        if sequence_indices.numel() != 1:
+            raise ValueError("A specific sequence must contain one active synapse.")
+        self.model.hidden_layer["0"].synapse_indices[
+            rewire_mask.repeat_interleave(
+                self.model.hidden_layer["0"].spines_per_output_channel
+            )
+        ] = sequence_indices.to(self.model.device).repeat(
+            rewire_mask.sum() * self.model.hidden_layer["0"].spines_per_output_channel
         )

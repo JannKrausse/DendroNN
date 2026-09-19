@@ -1,5 +1,6 @@
 # Tested with Python 3.12. Install the appropriate PyTorch wheel for the target machine.
 numpy==1.26.3
+numba==0.67.0
 scipy==1.15.0
 pandas==2.2.3
 scikit-learn==1.6.0

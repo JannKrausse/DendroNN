@@ -39,10 +39,20 @@ class DendroNNUnit(nn.Module):
             self.sequence_len_probs, num_samples=self.num_units, replacement=True
         )
         self.register_buffer("sequence_len_dist_rep", sequence_len_dist)
+        self.register_buffer(
+            "sequence_len_indices",
+            self.sequence_len_dist_rep.repeat((self.batch_size, 1)).unsqueeze(-1)
+            - 1,
+            persistent=False,
+        )
 
         num_parallel_seq = torch.max(inter_spike_intervals).item() + 1
         self.num_parallel_seq = num_parallel_seq
         self.spine_memory_size = self.num_parallel_seq + self.spike_acceptance_window
+        self.register_buffer(
+            "logical_time_indices", torch.arange(self.spine_memory_size)
+        )
+        self.buffer_head = 0
 
         self.register_buffer(
             "expected_spikes",
@@ -56,30 +66,6 @@ class DendroNNUnit(nn.Module):
             ),
         )
 
-        self.register_buffer(
-            "expected_spikes_update_mask",
-            torch.cat(
-                (
-                    torch.ones(
-                        (
-                            self.batch_size,
-                            self.num_units,
-                            max(self.num_spines - 1, 1),
-                            self.spine_memory_size - 1,
-                        )
-                    ),
-                    torch.zeros(
-                        (
-                            self.batch_size,
-                            self.num_units,
-                            max(self.num_spines - 1, 1),
-                            1,
-                        )
-                    ),
-                ),
-                dim=-1,
-            ),
-        )
         self.register_buffer(
             "expecting_spines_padding", torch.ones((self.batch_size, self.num_units, 1))
         )
@@ -105,11 +91,19 @@ class DendroNNUnit(nn.Module):
         )
 
     def forward(self, x):
+        physical_time_indices = (
+            self.logical_time_indices + self.buffer_head
+        ) % self.spine_memory_size
         expecting_spines = torch.cat(
             (
                 self.expecting_spines_padding,
                 torch.any(
-                    self.expected_spikes[:, :, :, : (self.spike_acceptance_window + 1)]
+                    self.expected_spikes.index_select(
+                        -1,
+                        physical_time_indices[
+                            : self.spike_acceptance_window + 1
+                        ],
+                    )
                     != 0,
                     dim=-1,
                 ),
@@ -121,30 +115,34 @@ class DendroNNUnit(nn.Module):
             x * expecting_spines
         )  # only accept spikes if the spine is expecting one
 
-        accepted_spikes[:, :, :-1] = self.parallel_seqs * accepted_spikes[:, :, :-1] + (
-            1 - self.parallel_seqs
-        ) * accepted_spikes[:, :, :-1] * (
-            1
-            - (
-                self.expected_spikes[:, :, :, (self.spike_acceptance_window + 1) :].sum(
-                    dim=-1
-                )
-                > 0
-            ).to(torch.float)
-        )
+        if not self.parallel_seqs:
+            accepted_spikes[:, :, :-1] = accepted_spikes[:, :, :-1] * (
+                1
+                - (
+                    self.expected_spikes.index_select(
+                        -1,
+                        physical_time_indices[self.spike_acceptance_window + 1 :],
+                    ).sum(dim=-1)
+                    > 0
+                ).to(torch.float)
+            )
 
-        self.expected_spikes = (
-            torch.roll(self.expected_spikes, shifts=-1, dims=-1)
-            * self.expected_spikes_update_mask
+        self.buffer_head = (self.buffer_head + 1) % self.spine_memory_size
+        tail_index = (self.buffer_head + self.spine_memory_size - 1) % (
+            self.spine_memory_size
         )
+        self.expected_spikes[..., tail_index] = 0
 
         # insert accepted_spikes into expected_spikes at correct positions given by self.inter_spike_intervals
         accepted_spikes_mask = accepted_spikes[:, :, :-1].flatten() != 0
         index_put_values = accepted_spikes[:, :, :-1].flatten()[accepted_spikes_mask]
+        physical_delay_indices = (
+            self.inter_spike_intervals + self.buffer_head
+        ) % self.spine_memory_size
         index_put_idx = torch.cat(
             (
                 self.index_put_idx_other_dims,
-                self.inter_spike_intervals.flatten()
+                physical_delay_indices.flatten()
                 .repeat(self.batch_size)
                 .unsqueeze(-1),
             ),
@@ -156,66 +154,91 @@ class DendroNNUnit(nn.Module):
         activations = torch.gather(
             accepted_spikes,
             dim=2,
-            index=(
-                self.sequence_len_dist_rep.to(x.device)
-                .repeat((self.batch_size, 1))
-                .unsqueeze(dim=-1)
-                - 1
-            ),
+            index=self.sequence_len_indices,
         ).squeeze(
             dim=-1
         )  # output is determined by last spine
         return activations
 
     def reset(self, device):
-        self.expected_spikes.data = torch.zeros(
-            (
-                self.batch_size,
-                self.num_units,
-                max(self.num_spines - 1, 1),
-                self.spine_memory_size,
+        target_device = (
+            torch.device(device) if device is not None else self.expected_spikes.device
+        )
+        expected_spikes_shape = (
+            self.batch_size,
+            self.num_units,
+            max(self.num_spines - 1, 1),
+            self.spine_memory_size,
+        )
+        if (
+            self.expected_spikes.shape != expected_spikes_shape
+            or self.expected_spikes.device != target_device
+        ):
+            self.expected_spikes = torch.zeros(
+                expected_spikes_shape,
+                device=target_device,
+                dtype=self.expected_spikes.dtype,
             )
-        ).to(device)
+        else:
+            self.expected_spikes.zero_()
 
-        self.expected_spikes_update_mask.data = torch.cat(
-            (
-                torch.ones(
-                    (
-                        self.batch_size,
-                        self.num_units,
-                        max(self.num_spines - 1, 1),
-                        self.spine_memory_size - 1,
-                    )
-                ),
-                torch.zeros(
-                    (self.batch_size, self.num_units, max(self.num_spines - 1, 1), 1)
-                ),
-            ),
-            dim=-1,
-        ).to(device)
-        self.expecting_spines_padding.data = torch.ones(
-            (self.batch_size, self.num_units, 1)
-        ).to(device)
+        padding_shape = (self.batch_size, self.num_units, 1)
+        if (
+            self.expecting_spines_padding.shape != padding_shape
+            or self.expecting_spines_padding.device != target_device
+        ):
+            self.expecting_spines_padding = torch.ones(
+                padding_shape,
+                device=target_device,
+                dtype=self.expecting_spines_padding.dtype,
+            )
+        else:
+            self.expecting_spines_padding.fill_(1)
 
-        batch_idx = (
-            torch.arange(self.batch_size)
-            .repeat_interleave(self.num_units * max(self.num_spines - 1, 1))
+        if self.logical_time_indices.device != target_device:
+            self.logical_time_indices = self.logical_time_indices.to(target_device)
+        sequence_indices = (
+            self.sequence_len_dist_rep.to(target_device)
+            .repeat((self.batch_size, 1))
             .unsqueeze(-1)
+            - 1
         )
-        unit_idx = (
-            torch.arange(self.num_units)
-            .repeat(self.batch_size)
-            .repeat_interleave((max(self.num_spines - 1, 1)))
-            .unsqueeze(-1)
+        if (
+            self.sequence_len_indices.shape != sequence_indices.shape
+            or self.sequence_len_indices.device != target_device
+        ):
+            self.sequence_len_indices = sequence_indices
+        else:
+            self.sequence_len_indices.copy_(sequence_indices)
+        self.buffer_head = 0
+
+        index_shape = (
+            self.batch_size * self.num_units * max(self.num_spines - 1, 1),
+            3,
         )
-        spine_idx = (
-            torch.arange(max(self.num_spines - 1, 1))
-            .repeat(self.batch_size * self.num_units)
-            .unsqueeze(-1)
-        )
-        self.index_put_idx_other_dims.data = torch.cat(
-            (batch_idx, unit_idx, spine_idx), dim=-1
-        ).to(device)
+        if (
+            self.index_put_idx_other_dims.shape != index_shape
+            or self.index_put_idx_other_dims.device != target_device
+        ):
+            batch_idx = (
+                torch.arange(self.batch_size, device=target_device)
+                .repeat_interleave(self.num_units * max(self.num_spines - 1, 1))
+                .unsqueeze(-1)
+            )
+            unit_idx = (
+                torch.arange(self.num_units, device=target_device)
+                .repeat(self.batch_size)
+                .repeat_interleave(max(self.num_spines - 1, 1))
+                .unsqueeze(-1)
+            )
+            spine_idx = (
+                torch.arange(max(self.num_spines - 1, 1), device=target_device)
+                .repeat(self.batch_size * self.num_units)
+                .unsqueeze(-1)
+            )
+            self.index_put_idx_other_dims = torch.cat(
+                (batch_idx, unit_idx, spine_idx), dim=-1
+            )
 
     def set_new_inter_spike_intervals(self, delay_mask, seq_len, dataset, class_ids):
         if dataset == "SHD":
