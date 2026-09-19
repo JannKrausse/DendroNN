@@ -53,7 +53,7 @@ spike_acceptance_window: 0
 parallel_sequences: true
 refrac_period: false
 output_bias: false
-output_decoder: max
+output_decoder: last
 lr: 0.001
 lr_scheduled: false
 lr_decay: 15
