@@ -1,0 +1,71 @@
+# Minimal one-batch smoke test for validating the installation and training path.
+dataset: SHD
+experiment_name: smoke
+num_runs: 1
+seed: 42
+device: auto
+data_root: ./data
+
+batch_size: 8
+time_window: 8000
+spat_ds_fac: 0.14285714285714285
+num_crop_pixel: 0
+seq_len: null
+padding_size: null
+
+slice_input_by_amount: true
+num_slices: 25
+include_zero_slice: false
+slicing_thrs: [0.5]
+slicing_thrs_maxs: null
+
+aug_og_data: false
+aug_kwargs: null
+denoise_data: false
+denoise_mode: tonic
+task_type: null
+jitter_level: none
+dropout_level: none
+poisson_level: none
+permute_data: false
+permutation_seed: null
+
+rewiring: false
+supervised: true
+continue_rewiring_from_checkpoint: false
+continue_supervised_from_checkpoint: false
+load_checkpoint_folder: null
+
+num_searching_units: 32
+thr_factor: 30
+thr_low: -90
+thr_high: 450
+penalty_fac: 2.0
+class_selectivity_threshold: 0.05
+selectivity_gap_to_other_classes: 0.03
+experiment_mode: std
+
+num_hidden_layer: 1
+num_hidden_units: 16
+num_spines: 2
+min_num_spines: 2
+max_seq_len: null
+spike_acceptance_window: 0
+parallel_sequences: true
+refrac_period: false
+output_bias: false
+output_decoder: last
+
+lr: 0.001
+lr_scheduled: false
+lr_decay: 15
+lr_update_freq: 5
+l2_regu: 0
+dropout: 0.0
+num_workers: 0
+max_rewiring_epochs: 1
+max_supervised_epochs: 1
+early_stopping_patience: 1
+pruning_level: 0.05
+bit_width: 8
+smoke_test: true

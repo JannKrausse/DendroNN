@@ -1,0 +1,17 @@
+__pycache__/
+.idea/
+.vscode/
+.venv/
+*.py[cod]
+
+# Generated training and experiment artifacts
+logs/
+data/
+neuromorse_data/NeuroMorse/
+
+
+*.ckpt
+*.csv
+*.pkl
+*.mat
+*.npy

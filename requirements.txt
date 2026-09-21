@@ -1,0 +1,27 @@
+# Tested with Python 3.12. Install the appropriate PyTorch wheel for the target machine.
+numpy==1.26.3
+numba==0.67.0
+scipy==1.15.0
+pandas==2.2.3
+scikit-learn==1.6.0
+matplotlib==3.10.0
+seaborn==0.13.2
+joblib==1.4.2
+PyYAML==6.0.2
+tqdm
+
+torch==2.2.1
+torchvision==0.17.1
+torchaudio==2.2.1
+pytorch-lightning==2.5.0.post0
+torchmetrics==1.6.1
+tensorboard==2.18.0
+
+tonic==1.5.0
+snntorch==0.9.1
+optuna==4.2.0
+h5py==3.12.1
+nir==1.0.4
+nirtorch==1.0
+librosa==0.10.2.post1
+soundfile==0.13.0
